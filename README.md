@@ -2,29 +2,7 @@
 
 An automated auditing tool for Klarna integration, designed for team collaboration.
 
-## Project Structure
-
-```
-klarna-integration-auto-auditor/
-├── src/              # Source code directory
-├── tests/            # Test files directory
-├── requirements.txt  # Project dependencies
-└── README.md         # Project documentation
-```
-
 ## Installation
-
-```bash
-pip install -r requirements.txt
-```
-
-## Running the Project
-
-```bash
-python src/main.py
-```
-
-## Development Guide
 
 1. Create a virtual environment:
    ```bash
@@ -39,18 +17,66 @@ python src/main.py
    pip install -r requirements.txt
    ```
 
-3. Run tests:
+3. Install Playwright browsers:
    ```bash
-   pytest tests/
+   playwright install chromium
    ```
 
-## Contributing
+## Usage
 
-1. Fork the project
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+Run the auditor with a merchant registry CSV file:
+
+```bash
+python -m app.run --input data/merchant_registry.csv --out out/
+```
+
+### Command Line Options
+
+- `--input`: Path to merchant registry CSV file (required)
+- `--out`: Output directory for reports and screenshots (required)
+- `--headless`: Run browser in headless mode (default: True)
+- `--timeout`: Page load timeout in milliseconds (default: 30000)
+- `--max-retries`: Maximum number of retries for failed audits (default: 2)
+
+### Example
+
+```bash
+python -m app.run --input data/merchant_registry.csv --out out/ --timeout 60000
+```
+
+## Merchant Registry CSV Format
+
+The CSV file should have the following columns:
+
+```csv
+merchant_id,merchant_name,base_url,checkout_url,product_url,cart_url,status,priority,notes
+MERCHANT_001,Example Store,https://example.com,/checkout,/product/123,/cart,active,8,Main production store
+```
+
+Required fields: `merchant_id`, `merchant_name`, `base_url`
+
+## Output
+
+The tool generates:
+
+1. **JSON Report**: `out/audit_YYYYMMDD_HHMMSS.json` - Contains audit results for all merchants
+2. **Screenshots**: `out/screenshots/` - Screenshots for each merchant audit
+
+## Running Tests
+
+```bash
+pytest tests/
+```
+
+## Features
+
+- ✅ Reads merchant registry from CSV
+- ✅ Uses Playwright to visit merchant homepages
+- ✅ Detects Klarna logo in footer (FOOTER_KLARNA_LOGO rule)
+- ✅ Generates JSON reports with evidence
+- ✅ Saves screenshots for each audit
+- ✅ Timeout and retry mechanisms
+- ✅ Exception isolation (one merchant failure doesn't stop others)
 
 ## License
 
