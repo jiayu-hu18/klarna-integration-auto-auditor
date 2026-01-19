@@ -4,7 +4,7 @@ An automated auditing tool for Klarna integration, designed for team collaborati
 
 ## Installation
 
-1. Create a virtual environment:
+1. Create a virtual environment (recommended):
    ```bash
    python -m venv venv
    source venv/bin/activate  # Linux/Mac
@@ -24,43 +24,82 @@ An automated auditing tool for Klarna integration, designed for team collaborati
 
 ## Usage
 
-Run the auditor with a merchant registry CSV file:
+### Phase 0: Single Merchant Audit (Current)
+
+Run Phase 0 audit for a single merchant (humac.dk):
+
+```bash
+python -m auditor.run --out-dir out --headless true
+```
+
+**Command Line Options:**
+- `--out-dir` (required): Output directory for reports and screenshots
+- `--headless` (optional): Run browser in headless mode (default: `true`)
+- `--slowmo` (optional): Slow down operations by milliseconds (for debugging)
+- `--locale` (optional): Browser locale (default: `da-DK`)
+
+**Example:**
+```bash
+# Run with visible browser (for debugging)
+python -m auditor.run --out-dir out --headless false --slowmo 200
+```
+
+**Output:**
+- JSON Report: `out/humac.dk/report.json`
+- Screenshots: `out/humac.dk/*.png` (footer, pdp_osm, cart, checkout_payment)
+
+**Checks Performed:**
+1. **FOOTER_KLARNA_LOGO** - Detects Klarna logo in footer
+2. **PDP_OSM** - Detects Klarna On-Site Messaging on product page
+3. **CART_KLARNA** - Detects Klarna in cart page
+4. **CHECKOUT_PAYMENT_POSITION** - Detects Klarna payment method position
+
+See [README_PHASE0.md](README_PHASE0.md) for detailed Phase 0 documentation.
+
+### Batch Audit (Future)
+
+For batch processing with CSV merchant registry:
 
 ```bash
 python -m app.run --input data/merchant_registry.csv --out out/
 ```
 
-### Command Line Options
+## Project Structure
 
-- `--input`: Path to merchant registry CSV file (required)
-- `--out`: Output directory for reports and screenshots (required)
-- `--headless`: Run browser in headless mode (default: True)
-- `--timeout`: Page load timeout in milliseconds (default: 30000)
-- `--max-retries`: Maximum number of retries for failed audits (default: 2)
-
-### Example
-
-```bash
-python -m app.run --input data/merchant_registry.csv --out out/ --timeout 60000
+```
+klarna-integration-auto-auditor/
+├── auditor/              # Phase 0 single merchant audit
+│   ├── run.py           # CLI entry point
+│   ├── checks/          # Audit checks
+│   ├── navigator.py     # Page navigation
+│   ├── screenshot.py   # Screenshot management
+│   └── report.py        # JSON report generation
+├── app/                 # Batch audit (existing)
+├── data/
+│   └── addresses/       # Test addresses for different countries
+├── tests/               # Test files
+└── out/                 # Output directory
 ```
 
-## Merchant Registry CSV Format
+## Test Addresses
 
-The CSV file should have the following columns:
+Test addresses are stored in `data/addresses/addresses.json`. You can manually edit this file to add/update addresses for different countries. The system uses Klarna-approved test data from [Klarna's official documentation](https://docs.klarna.com/resources/developer-tools/sample-data/sample-customer-data/).
 
-```csv
-merchant_id,merchant_name,base_url,checkout_url,product_url,cart_url,status,priority,notes
-MERCHANT_001,Example Store,https://example.com,/checkout,/product/123,/cart,active,8,Main production store
+**Example:**
+```json
+{
+  "DK": {
+    "first_name": "Test",
+    "last_name": "Person-dk",
+    "email": "customer@email.dk",
+    "phone": "+4542555628",
+    "street": "Dantes Plads 7",
+    "postal_code": "1556",
+    "city": "København Ø",
+    "country": "DK"
+  }
+}
 ```
-
-Required fields: `merchant_id`, `merchant_name`, `base_url`
-
-## Output
-
-The tool generates:
-
-1. **JSON Report**: `out/audit_YYYYMMDD_HHMMSS.json` - Contains audit results for all merchants
-2. **Screenshots**: `out/screenshots/` - Screenshots for each merchant audit
 
 ## Running Tests
 
@@ -70,13 +109,28 @@ pytest tests/
 
 ## Features
 
+### Phase 0 (Current)
+- ✅ Single merchant audit (humac.dk)
+- ✅ 4 automatic checks with error isolation
+- ✅ Screenshot capture for each check
+- ✅ JSON report generation
+- ✅ Optimized timeouts (10s max per operation)
+- ✅ Cookie banner auto-handling
+- ✅ Iframe support for detection
+
+### Batch Audit (Future)
 - ✅ Reads merchant registry from CSV
 - ✅ Uses Playwright to visit merchant homepages
-- ✅ Detects Klarna logo in footer (FOOTER_KLARNA_LOGO rule)
+- ✅ Detects Klarna logo in footer
 - ✅ Generates JSON reports with evidence
-- ✅ Saves screenshots for each audit
 - ✅ Timeout and retry mechanisms
-- ✅ Exception isolation (one merchant failure doesn't stop others)
+- ✅ Exception isolation
+
+## Documentation
+
+- [README_PHASE0.md](README_PHASE0.md) - Phase 0 detailed documentation
+- [DESIGN.md](DESIGN.md) - Project design document
+- [PHASE0_DESIGN.md](PHASE0_DESIGN.md) - Phase 0 design document
 
 ## License
 

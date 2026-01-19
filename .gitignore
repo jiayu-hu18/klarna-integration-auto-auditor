@@ -133,6 +133,11 @@ dmypy.json
 .DS_Store
 Thumbs.db
 
+# Output directories
+out/
+reports/
+screenshots/
+
 # Temporary deployment scripts (may contain secrets)
 setup_github.py
 setup_github_simple.sh
