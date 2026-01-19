@@ -1,0 +1,57 @@
+{
+  "merchant": "humac.dk",
+  "run_id": "20260119_171442",
+  "timestamp": "2026-01-19T17:14:42.500117Z",
+  "results": [
+    {
+      "check_id": "FOOTER_KLARNA_LOGO",
+      "status": "PASS",
+      "timestamp": "2026-01-19T17:13:09.132800Z",
+      "evidence": {
+        "screenshot_path": "out/humac.dk/footer_20260119_171309.png",
+        "matched_selector": null,
+        "matched_text": "Klarna found in footer text"
+      }
+    },
+    {
+      "check_id": "PDP_OSM",
+      "status": "PASS",
+      "timestamp": "2026-01-19T17:13:11.170622Z",
+      "evidence": {
+        "screenshot_path": "out/humac.dk/pdp_osm_20260119_171311.png",
+        "matched_selector": null,
+        "matched_text": "Klarna"
+      }
+    },
+    {
+      "check_id": "CART_KLARNA",
+      "status": "FAIL",
+      "timestamp": "2026-01-19T17:13:57.340174Z",
+      "evidence": {
+        "screenshot_path": "out/humac.dk/cart_20260119_171347.png",
+        "matched_selector": null,
+        "matched_text": null
+      },
+      "error_reason": "Cart is empty - product was not added to cart successfully"
+    },
+    {
+      "check_id": "CHECKOUT_PAYMENT_POSITION",
+      "status": "FAIL",
+      "timestamp": "2026-01-19T17:14:42.500057Z",
+      "evidence": {
+        "screenshot_path": "out/humac.dk/checkout_payment_20260119_171442.png",
+        "matched_selector": null,
+        "matched_text": null
+      },
+      "error_reason": "Checkout button not found",
+      "payment_methods": [],
+      "klarna_index": null
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 2,
+    "warned": 0,
+    "total": 4
+  }
+}

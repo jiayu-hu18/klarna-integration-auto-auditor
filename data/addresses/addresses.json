@@ -1,0 +1,35 @@
+{
+  "SE": {
+    "first_name": "Test",
+    "last_name": "User",
+    "email": "test+klarna@example.com",
+    "phone": "+46123456789",
+    "street": "Testgatan 1",
+    "postal_code": "11122",
+    "region": "Stockholm",
+    "city": "Stockholm",
+    "country": "SE"
+  },
+  "DK": {
+    "first_name": "Test",
+    "last_name": "Person-dk",
+    "email": "customer@email.dk",
+    "phone": "+4542555628",
+    "street": "Dantes Plads 7",
+    "postal_code": "1556",
+    "region": "København Ø",
+    "city": "København Ø",
+    "country": "DK"
+  },
+  "NO": {
+    "first_name": "Test",
+    "last_name": "User",
+    "email": "test+klarna@example.com",
+    "phone": "+4712345678",
+    "street": "Testgate 1",
+    "postal_code": "0150",
+    "region": "Oslo",
+    "city": "Oslo",
+    "country": "NO"
+  }
+}
