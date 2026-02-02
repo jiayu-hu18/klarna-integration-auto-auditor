@@ -14,6 +14,19 @@ class Evidence:
     screenshot_path: Optional[str] = None
     matched_selector: Optional[str] = None
     matched_text: Optional[str] = None
+    # PDP_OSM: full page (pdp_full_*.png) and optional element (pdp_osm_element_*.png)
+    page_screenshot_path: Optional[str] = None
+    element_screenshot_path: Optional[str] = None
+    # FOOTER_KLARNA_LOGO: template matching + payments ROI (multi-template)
+    template_match_score: Optional[float] = None
+    template_bbox: Optional[List[int]] = None
+    template_path: Optional[str] = None
+    debug_overlay_path: Optional[str] = None
+    roi_screenshot_path: Optional[str] = None
+    best_template_path: Optional[str] = None
+    best_score: Optional[float] = None
+    best_bbox: Optional[List[int]] = None
+    all_templates: Optional[List[Dict[str, Any]]] = None
 
 
 @dataclass
@@ -72,15 +85,38 @@ class ReportGenerator:
     
     def _format_result(self, result: CheckResult) -> Dict[str, Any]:
         """Format single check result to JSON"""
+        evidence_dict = {
+            "screenshot_path": result.evidence.screenshot_path,
+            "matched_selector": result.evidence.matched_selector,
+            "matched_text": result.evidence.matched_text
+        }
+        if result.evidence.page_screenshot_path:
+            evidence_dict["page_screenshot_path"] = result.evidence.page_screenshot_path
+        if result.evidence.element_screenshot_path:
+            evidence_dict["element_screenshot_path"] = result.evidence.element_screenshot_path
+        if result.evidence.template_match_score is not None:
+            evidence_dict["template_match_score"] = result.evidence.template_match_score
+        if result.evidence.template_bbox is not None:
+            evidence_dict["template_bbox"] = result.evidence.template_bbox
+        if result.evidence.template_path:
+            evidence_dict["template_path"] = result.evidence.template_path
+        if result.evidence.debug_overlay_path:
+            evidence_dict["debug_overlay_path"] = result.evidence.debug_overlay_path
+        if result.evidence.roi_screenshot_path:
+            evidence_dict["roi_screenshot_path"] = result.evidence.roi_screenshot_path
+        if result.evidence.best_template_path:
+            evidence_dict["best_template_path"] = result.evidence.best_template_path
+        if result.evidence.best_score is not None:
+            evidence_dict["best_score"] = result.evidence.best_score
+        if result.evidence.best_bbox is not None:
+            evidence_dict["best_bbox"] = result.evidence.best_bbox
+        if result.evidence.all_templates is not None:
+            evidence_dict["all_templates"] = result.evidence.all_templates
         formatted = {
             "check_id": result.check_id,
             "status": result.status,
             "timestamp": result.timestamp,
-            "evidence": {
-                "screenshot_path": result.evidence.screenshot_path,
-                "matched_selector": result.evidence.matched_selector,
-                "matched_text": result.evidence.matched_text
-            }
+            "evidence": evidence_dict
         }
         
         # Add error_reason if FAIL

@@ -30,13 +30,27 @@ class CartKlarnaCheck:
             if 'produkter' not in current_url.lower():
                 # Navigate to PDP first
                 pdp_url = f"{base_url.rstrip('/')}/produkter/headphones/airpods-pro-3"
+                print(f"[DEBUG] Not on PDP, navigating to: {pdp_url}")
                 await navigator.navigate_to_pdp(pdp_url)
-                await navigator.page.wait_for_timeout(2000)
+                await navigator.page.wait_for_timeout(1000)
             
             # 2. Click add to cart
-            success = await navigator.add_to_cart()
+            success, debug_info = await navigator.add_to_cart()
             if not success:
-                # Try to navigate to cart anyway to see what's there
+                # Save failure screenshot with debug info
+                screenshot_path = await screenshot_manager.capture_cart(navigator.page)
+                
+                # Build detailed error message
+                error_parts = ["Add to cart failed"]
+                if debug_info.get('button_text'):
+                    error_parts.append(f"Button text: {debug_info['button_text']}")
+                if debug_info.get('options_handled', {}).get('vælg_detected'):
+                    error_parts.append("Vælg detected but selection may have failed")
+                if debug_info.get('options_handled', {}).get('selects_handled'):
+                    error_parts.append(f"Selected options: {debug_info['options_handled']['selects_handled']}")
+                
+                error_reason = "ATC failed -> cart empty"
+                print(f"[DEBUG] ATC failed - Button: {debug_info.get('button_text')}, Options: {debug_info.get('options_handled')}")
                 await navigator.navigate_to_cart(base_url)
                 screenshot_path = await screenshot_manager.capture_cart(navigator.page)
                 return CheckResult(
@@ -44,22 +58,25 @@ class CartKlarnaCheck:
                     status="FAIL",
                     evidence=Evidence(screenshot_path=screenshot_path),
                     timestamp=datetime.now().isoformat() + "Z",
-                    error_reason="Add to cart button not found or click failed"
+                    error_reason=error_reason
                 )
             
-            # 3. Minimal wait to ensure cart is updated
-            await navigator.page.wait_for_timeout(500)
-            
-            # 4. Navigate to cart
-            success = await navigator.navigate_to_cart(base_url)
-            if not success:
-                return CheckResult(
-                    check_id=self.CHECK_ID,
-                    status="FAIL",
-                    evidence=Evidence(),
-                    timestamp=datetime.now().isoformat() + "Z",
-                    error_reason="Cart navigation failed"
-                )
+            # 3. Check if we're already on cart (from add_to_cart success)
+            current_url = navigator.page.url
+            if '/cart' in current_url.lower():
+                print("[DEBUG] Already on cart page from add_to_cart")
+            else:
+                # Navigate to cart if not already there
+                print("[DEBUG] Navigating to cart page...")
+                success = await navigator.navigate_to_cart(base_url)
+                if not success:
+                    return CheckResult(
+                        check_id=self.CHECK_ID,
+                        status="FAIL",
+                        evidence=Evidence(),
+                        timestamp=datetime.now().isoformat() + "Z",
+                        error_reason="Cart navigation failed"
+                    )
             
             # 3. Wait for cart to load (reduced timeout)
             ready, selector, keyword = await navigator.wait_for_page_ready(

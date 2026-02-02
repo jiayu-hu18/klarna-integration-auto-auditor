@@ -3,6 +3,7 @@ Screenshot management
 """
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 from playwright.async_api import Page, ElementHandle
 
 
@@ -54,37 +55,67 @@ class ScreenshotManager:
         self,
         page: Page
     ) -> str:
-        """Capture PDP OSM/price area screenshot"""
+        """Capture PDP OSM/price area screenshot - prioritize product summary/price area"""
         path = self._generate_path("pdp_osm")
         
-        # Try to capture price/OSM area
-        try:
-            # Look for price element
-            price_selectors = ['.price', '[class*="price"]', '[data-price]', '#price']
-            for selector in price_selectors:
-                try:
-                    price_element = await page.query_selector(selector)
-                    if price_element:
-                        # Get bounding box and expand to capture surrounding area
-                        box = await price_element.bounding_box()
-                        if box:
-                            # Expand box to capture more area
-                            expanded_box = {
-                                'x': max(0, box['x'] - 100),
-                                'y': max(0, box['y'] - 200),
-                                'width': box['width'] + 200,
-                                'height': box['height'] + 400
-                            }
-                            await page.screenshot(path=path, clip=expanded_box)
-                            return path
-                except Exception:
-                    continue
-        except Exception:
-            pass
+        # Try to capture product summary / price area first
+        summary_selectors = [
+            '[class*="product-summary"]',
+            '[class*="product-info"]',
+            '[class*="price"]',
+            '[data-price]',
+            '[class*="product-price"]',
+            '[id*="price"]'
+        ]
+        
+        for selector in summary_selectors:
+            try:
+                element = await page.query_selector(selector)
+                if element:
+                    # Get bounding box and expand to capture surrounding area
+                    box = await element.bounding_box()
+                    if box:
+                        # Expand box to capture more area (product summary + price + OSM)
+                        expanded_box = {
+                            'x': max(0, box['x'] - 150),
+                            'y': max(0, box['y'] - 100),
+                            'width': min(box['width'] + 300, 1920),
+                            'height': min(box['height'] + 500, 1080)
+                        }
+                        await page.screenshot(path=path, clip=expanded_box)
+                        return path
+            except Exception:
+                continue
         
         # Fallback: capture viewport (not full page to focus on content)
         await page.screenshot(path=path)
         return path
+    
+    async def capture_pdp_osm_aligned(
+        self,
+        page: Page,
+        klarna_element: ElementHandle
+    ) -> str:
+        """Capture screenshot aligned with Klarna text element"""
+        path = self._generate_path("pdp_osm")
+        try:
+            # Scroll to visible (required)
+            await klarna_element.scroll_into_view_if_needed()
+            await page.wait_for_timeout(500)
+            # Screenshot its bounding box area
+            box = await klarna_element.bounding_box()
+            if box:
+                expanded_box = {
+                    'x': max(0, box['x'] - 200),
+                    'y': max(0, box['y'] - 150),
+                    'width': min(box['width'] + 400, 1920),
+                    'height': min(box['height'] + 300, 1080)
+                }
+                await page.screenshot(path=path, clip=expanded_box)
+                return path
+        except Exception:
+            pass
+        return await self.capture_pdp_osm(page)
     
     async def capture_cart(
         self,

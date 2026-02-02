@@ -40,10 +40,11 @@ class CheckoutPaymentCheck:
             # 1. Navigate to checkout (assumes we're on cart)
             success, error_msg = await navigator.navigate_to_checkout()
             if not success:
-                # Capture error screenshot
                 screenshot_path = await screenshot_manager.capture_checkout_payment(page)
+                # Check if cart is empty
+                if 'cart empty' in error_msg.lower() or 'cart is empty' in error_msg.lower():
+                    error_msg = "ATC failed -> cart empty"
                 print(f"[{self.CHECK_ID}] FAIL - Cannot reach checkout: {error_msg}")
-                print(f"[{self.CHECK_ID}] Screenshot: {screenshot_path}")
                 return CheckResult(
                     check_id=self.CHECK_ID,
                     status="FAIL",

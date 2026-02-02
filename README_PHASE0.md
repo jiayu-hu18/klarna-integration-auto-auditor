@@ -26,21 +26,22 @@ Single merchant audit script for verifying Klarna Best Practice minimum closed l
 
 ### Basic Usage
 
-Run the audit for humac.dk:
+Run the audit for a merchant (default: jula.se):
 
 ```bash
-python -m auditor.run --out-dir out --headless true
+python -m auditor.run --out-dir out
+python -m auditor.run --out-dir out --merchant https://www.aliexpress.com
+python -m auditor.run --out-dir out --merchant https://www.shein.com
 ```
 
 ### Command Line Options
 
 - `--out-dir` (required): Output directory for reports and screenshots
+- `--merchant` (optional): Merchant URL or domain (default: `https://www.jula.se`)
 - `--headless` (optional): Run browser in headless mode (default: `true`)
-  - Use `--headless false` to see the browser (useful for debugging)
-- `--slowmo` (optional): Slow down operations by milliseconds (for debugging)
-  - Example: `--slowmo 200` to add 200ms delay between actions
-- `--locale` (optional): Browser locale (default: `da-DK`)
-  - Example: `--locale en-US` for English
+- `--headed`: Run with visible browser (overrides `--headless`)
+- `--slowmo` (optional): Delay in ms (e.g. 200 for debugging)
+- `--locale` (optional): Browser locale (default: guessed from merchant URL)
 
 ### Examples
 
@@ -57,18 +58,22 @@ python -m auditor.run --out-dir out --headless true --locale en-US
 
 ## Output
 
-The script generates output in the `out/humac.dk/` directory:
+The script generates output in `out/<merchant>/` (e.g. `out/aliexpress.com/`, `out/shein.com/`):
 
 ### Directory Structure
 
 ```
-out/humac.dk/
-├── report.json                    # JSON audit report
-├── footer_20260119_150030.png     # Footer screenshot
-├── pdp_osm_20260119_150045.png    # PDP OSM screenshot
-├── cart_20260119_150100.png       # Cart screenshot
-└── checkout_payment_20260119_150115.png  # Checkout payment screenshot
+out/<merchant>/
+├── report.json                           # JSON audit report
+├── debug/                                # Footer check debug/evidence
+│   ├── footer_payments_section_attempt*.png   # Pay with section screenshot (evidence when PASS)
+│   ├── footer_evidence_attempt*.png          # Viewport when payments section not found (debug)
+│   └── footer_roi_match_debug_attempt*_score*.png  # Match overlay (green bbox)
+├── pdp_full_*.png                        # PDP OSM full-page screenshot
+└── ...
 ```
+
+**FOOTER_KLARNA_LOGO:** Evidence is the **payments section** element screenshot only (no full viewport match), so PASS evidence must visibly show Klarna in the “Pay with” area. Template-specific aspect-ratio filter (wordmark ≥1.8, pink badge ≥1.15) avoids false positives (e.g. “Choice” in product grid).
 
 ### Report JSON Format
 
@@ -139,8 +144,10 @@ out/humac.dk/
 The script performs 4 automatic checks:
 
 1. **FOOTER_KLARNA_LOGO** (HOME)
-   - Detects Klarna logo in footer (img src/alt or text)
-   - Captures footer area screenshot
+   - Scrolls to true bottom (wheel) to trigger lazy-loaded footer; clears overlays; brings footer into view.
+   - Locates “Pay with” / “Payment methods” / “We accept” etc. by text; takes **element screenshot of that section only** (no full viewport match to avoid false positives like “Choice” in product grid).
+   - Multi-template match with template-specific aspect-ratio filter (wordmark ≥1.8, pink badge ≥1.15).
+   - Evidence: `footer_payments_section_attempt*.png` (must visibly show Klarna). If payments section not found → FAIL (viewport saved for debug only).
 
 2. **PDP_OSM** (Product Detail Page)
    - Detects Klarna On-Site Messaging keywords
@@ -212,7 +219,7 @@ If checkout check fails, check the error_reason in report.json:
 
 ## Notes
 
-- The script is designed for **humac.dk** only
+- The script supports any **single merchant** (default: jula.se; use `--merchant` for aliexpress.com, shein.com, etc.)
 - Test addresses are loaded from `data/addresses/addresses.json`
 - All screenshots are saved with timestamp in filename
 - The script automatically handles cookie banners
