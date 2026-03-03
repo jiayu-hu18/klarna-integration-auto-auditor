@@ -17,7 +17,7 @@ except ImportError:
 MATCH_THRESHOLD = 0.70
 METHOD = "TM_CCOEFF_NORMED"
 # Multi-scale: needle scaled by these factors to handle different logo sizes
-SCALES = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
+SCALES = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4]
 # If ROI height < this, expand ROI by EXPAND_PAD and re-run match
 ROI_MIN_HEIGHT_EXPAND = 80
 EXPAND_PAD = 150
@@ -51,16 +51,52 @@ def _needle_to_gray_with_alpha(needle: "np.ndarray") -> "np.ndarray":
     return _ensure_grayscale(needle)
 
 
+def _match_one_haystack(
+    gray_haystack: "np.ndarray",
+    needle_gray: "np.ndarray",
+) -> Tuple[float, Optional[Tuple[int, int, int, int]]]:
+    """Run multi-scale template match on one haystack; return (best_score, bbox or None)."""
+    h_h, w_h = gray_haystack.shape[:2]
+    h_n0, w_n0 = needle_gray.shape[:2]
+    best_score = -1.0
+    best_loc: Optional[Tuple[int, int]] = None
+    best_w, best_h = 0, 0
+    method_enum = cv2.TM_CCOEFF_NORMED
+    for scale in SCALES:
+        w_n = max(1, int(w_n0 * scale))
+        h_n = max(1, int(h_n0 * scale))
+        if w_n > w_h or h_n > h_h:
+            continue
+        needle_resized = cv2.resize(needle_gray, (w_n, h_n))
+        try:
+            match = cv2.matchTemplate(gray_haystack, needle_resized, method_enum)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(match)
+            score = float(max_val)
+            if score > best_score:
+                best_score = score
+                best_loc = max_loc
+                best_w, best_h = w_n, h_n
+        except Exception:
+            continue
+    if best_loc is None:
+        return (0.0, None)
+    x, y = best_loc
+    return (best_score, (int(x), int(y), int(best_w), int(best_h)))
+
+
 def match_template_in_image(
     haystack_path: str,
     needle_path: str,
     threshold: float = 0.70,
+    try_inverted: bool = False,
 ) -> Dict[str, Any]:
     """
     Match template image (needle) in a larger image (haystack) using OpenCV.
     Needle is loaded with IMREAD_UNCHANGED; if 4-channel, alpha is used to composite onto gray.
-    Multi-scale matching (needle scaled 0.7~1.4). Returns dict with found, score, bbox, method, paths.
+    Multi-scale matching. Returns dict with found, score, bbox, method, paths.
     found=True when score >= threshold.
+    When try_inverted=True, also matches on inverted haystack (255 - gray) so white-on-dark
+    logos in the screenshot can match black-on-light templates (e.g. Kickscrew footer).
     """
     result = {
         "found": False,
@@ -99,34 +135,17 @@ def match_template_in_image(
         result["error"] = "failed to convert needle to gray"
         return result
 
-    h_h, w_h = gray_haystack.shape[:2]
-    h_n0, w_n0 = needle_gray.shape[:2]
-    best_score = -1.0
-    best_loc: Optional[Tuple[int, int]] = None
-    best_w, best_h = 0, 0
-    method_enum = cv2.TM_CCOEFF_NORMED
+    best_score, best_bbox = _match_one_haystack(gray_haystack, needle_gray)
+    if try_inverted:
+        inv_haystack = cv2.bitwise_not(gray_haystack)
+        inv_score, inv_bbox = _match_one_haystack(inv_haystack, needle_gray)
+        if inv_score > best_score:
+            best_score = inv_score
+            best_bbox = inv_bbox
 
-    for scale in SCALES:
-        w_n = max(1, int(w_n0 * scale))
-        h_n = max(1, int(h_n0 * scale))
-        if w_n > w_h or h_n > h_h:
-            continue
-        needle_resized = cv2.resize(needle_gray, (w_n, h_n))
-        try:
-            match = cv2.matchTemplate(gray_haystack, needle_resized, method_enum)
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(match)
-            score = float(max_val)
-            if score > best_score:
-                best_score = score
-                best_loc = max_loc
-                best_w, best_h = w_n, h_n
-        except Exception:
-            continue
-
-    if best_loc is not None:
-        x, y = best_loc
+    if best_bbox is not None:
         result["score"] = round(best_score, 4)
-        result["bbox"] = [int(x), int(y), int(best_w), int(best_h)]
+        result["bbox"] = list(best_bbox)
         result["found"] = best_score >= threshold
 
     return result

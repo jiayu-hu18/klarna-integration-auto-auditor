@@ -1,20 +1,18 @@
 """
-CLI entry point for Phase 0 auditor
+CLI entry point: detection-first pipeline; legacy footer/PDP checks only when ENABLE_LEGACY_FOOTER_CHECKS=true.
 """
 import argparse
 import asyncio
-import sys
+import os
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
-from auditor.checks.footer_klarna_logo import FooterKlarnaLogoCheck
-from auditor.checks.pdp_osm import PDPOSMCheck
-from auditor.checks.cart_klarna import CartKlarnaCheck
-from auditor.checks.checkout_payment import CheckoutPaymentCheck
 from auditor.navigator import Navigator
 from auditor.screenshot import ScreenshotManager
 from auditor.report import ReportGenerator, CheckResult, Evidence
+from auditor.detection import collect_page_signals, attach_network_collector, detect
 from datetime import datetime
 
+ENABLE_LEGACY_FOOTER_CHECKS = os.environ.get("ENABLE_LEGACY_FOOTER_CHECKS", "false").strip().lower() == "true"
 
 # Domain suffix -> locale when --locale is not provided (check longer suffixes first, e.g. .co.uk before .com)
 DOMAIN_LOCALE_MAP = {
@@ -87,6 +85,12 @@ def parse_args():
         default='https://www.jula.se',
         help='Merchant URL or domain (default: https://www.jula.se). e.g. https://www.humac.dk'
     )
+    parser.add_argument(
+        '--only',
+        default=None,
+        metavar='CHECK_ID',
+        help='Run only this check (e.g. FOOTER_KLARNA_LOGO or footer). Omit to run all checks.'
+    )
     return parser.parse_args()
 
 
@@ -122,8 +126,8 @@ async def main():
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=False,
-            slow_mo=300
+            headless=headless_mode,
+            slow_mo=args.slowmo
         )
         context = await browser.new_context(
             viewport={'width': 1920, 'height': 1080},
@@ -137,12 +141,12 @@ async def main():
         page.set_default_navigation_timeout(10000)  # navigation: 10s max
         
         try:
-            # Initialize components
             navigator = Navigator(page, headless_mode, home_url)
             screenshot_manager = ScreenshotManager(args.out_dir, merchant_slug)
             report_generator = ReportGenerator(args.out_dir, merchant_slug)
 
-            # Optional: load home once and read page lang for logging (can be used to suggest locale)
+            # --- Detection: attach network collector, goto home, collect signals, detect ---
+            network_urls = attach_network_collector(page)
             await navigator.navigate_to_home(home_url)
             try:
                 lang = await page.evaluate(
@@ -153,70 +157,78 @@ async def main():
                     print(f"[DEBUG] Page lang: {lang}")
             except Exception:
                 pass
+            signals = await collect_page_signals(page)
+            signals["network_requests_seen"] = list(network_urls)
+            profile = detect(signals, home_url)
+            detection_summary = {
+                "platform": profile.platform,
+                "psp": profile.psp,
+                "confidence": profile.confidence,
+                "evidence": profile.evidence,
+            }
+            print(f"[DETECTION] platform={profile.platform} psp={profile.psp} confidence={profile.confidence}")
 
-            # PDP URL: jula.se auto-picks from /erbjudanden/; others may need auto-pick or None
-            pdp_url = None
-            if "jula.se" in home_url:
-                print("[DEBUG] jula.se: pdp_url left None so navigate_to_pdp will auto-pick PDP")
-            else:
-                print("[DEBUG] navigate_to_pdp will auto-pick PDP if supported for this merchant")
-
-            # Initialize checks (only FOOTER + PDP_OSM for jula.se test)
-            checks = [
-                FooterKlarnaLogoCheck(),
-                PDPOSMCheck(),
-                # CartKlarnaCheck(),
-                # CheckoutPaymentCheck()
-            ]
-            
-            # Execute checks with error isolation
+            # --- Legacy checks (only when ENABLE_LEGACY_FOOTER_CHECKS=true) ---
             results = []
-            
-            for check in checks:
-                try:
-                    if isinstance(check, FooterKlarnaLogoCheck):
-                        result = await check.execute(
-                            page, navigator, screenshot_manager, home_url
-                        )
-                    elif isinstance(check, PDPOSMCheck):
-                        result = await check.execute(
-                            page, navigator, screenshot_manager, pdp_url
-                        )
-                    elif isinstance(check, CartKlarnaCheck):
-                        result = await check.execute(
-                            page, navigator, screenshot_manager, home_url
-                        )
-                    elif isinstance(check, CheckoutPaymentCheck):
-                        result = await check.execute(
-                            page, navigator, screenshot_manager, home_url
-                        )
-                    else:
-                        continue
-                    
-                    results.append(result)
-                    
-                except Exception as e:
-                    # Error isolation: continue with next check
-                    print(f"[{check.CHECK_ID}] Exception occurred: {str(e)}")
-                    results.append(CheckResult(
-                        check_id=check.CHECK_ID,
-                        status="FAIL",
-                        evidence=Evidence(),
-                        timestamp=datetime.now().isoformat() + "Z",
-                        error_reason=f"Exception: {str(e)}"
-                    ))
-            
-            # Generate report
-            report_path = report_generator.generate(results)
+            skipped_checks = []
+            if ENABLE_LEGACY_FOOTER_CHECKS:
+                from auditor.legacy_checks import FooterKlarnaLogoCheck, PDPOSMCheck
+                pdp_url = None
+                if "jula.se" in home_url:
+                    print("[DEBUG] jula.se: pdp_url left None so navigate_to_pdp will auto-pick PDP")
+                else:
+                    print("[DEBUG] navigate_to_pdp will auto-pick PDP if supported for this merchant")
+                all_checks = [FooterKlarnaLogoCheck(), PDPOSMCheck()]
+                if args.only:
+                    only_id = (args.only or "").strip().upper()
+                    if only_id == "FOOTER":
+                        only_id = "FOOTER_KLARNA_LOGO"
+                    checks = [c for c in all_checks if getattr(c, "CHECK_ID", "") == only_id]
+                    if not checks:
+                        print(f"[WARN] --only {args.only} did not match any check; available: FOOTER_KLARNA_LOGO, PDP_OSM")
+                        checks = all_checks
+                else:
+                    checks = all_checks
+                for check in checks:
+                    try:
+                        if isinstance(check, FooterKlarnaLogoCheck):
+                            result = await check.execute(page, navigator, screenshot_manager, home_url)
+                        elif isinstance(check, PDPOSMCheck):
+                            result = await check.execute(page, navigator, screenshot_manager, pdp_url)
+                        else:
+                            continue
+                        results.append(result)
+                    except Exception as e:
+                        print(f"[{check.CHECK_ID}] Exception: {str(e)}")
+                        results.append(CheckResult(
+                            check_id=check.CHECK_ID,
+                            status="FAIL",
+                            evidence=Evidence(),
+                            timestamp=datetime.now().isoformat() + "Z",
+                            error_reason=f"Exception: {str(e)}"
+                        ))
+            else:
+                skipped_checks = [
+                    {"check_id": "FOOTER_KLARNA_LOGO", "reason": "skipped: focus shifted to detection-only"},
+                    {"check_id": "PDP_OSM", "reason": "skipped: focus shifted to detection-only"},
+                ]
+
+            report_path = report_generator.generate(
+                results,
+                detection_summary=detection_summary,
+                skipped_checks=skipped_checks if skipped_checks else None,
+            )
             
             print("\n" + "=" * 60)
             print("Audit Summary")
             print("=" * 60)
-            passed = sum(1 for r in results if r.status == "PASS")
-            failed = sum(1 for r in results if r.status == "FAIL")
-            print(f"Total checks: {len(results)}")
-            print(f"Passed: {passed}")
-            print(f"Failed: {failed}")
+            print(f"Detection: platform={profile.platform} psp={profile.psp} confidence={profile.confidence}")
+            if results:
+                passed = sum(1 for r in results if r.status == "PASS")
+                failed = sum(1 for r in results if r.status == "FAIL")
+                print(f"Legacy checks: {len(results)} total, passed={passed}, failed={failed}")
+            else:
+                print("Legacy checks: skipped (ENABLE_LEGACY_FOOTER_CHECKS=false)")
             print(f"Report: {report_path}")
             print("=" * 60)
             

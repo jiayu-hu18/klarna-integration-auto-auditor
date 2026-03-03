@@ -3,6 +3,7 @@ Page navigation logic
 """
 import asyncio
 import os
+import random
 import re
 from typing import List, Tuple, Optional, Dict, Any
 from urllib.parse import urlparse, urljoin
@@ -27,6 +28,26 @@ EXCLUDE_PATTERNS = ["/p/order", "/p/cart", "/cart", "/order", "/checkout"]
 GOOD_PATH_PATTERNS = ["/product/", "/item/", "/produkt/", "/vara/", "/p/itm", "/products/"]
 BAD_PATH_PATTERNS = ["/order/", "/cart", "/checkout", "/p/order/"]
 TILE_SELECTORS = [".product-card a", ".product-tile a", ".product-item a", "[data-product-id] a", ".product__link", ".result-item a", ".productItem a"]
+
+# Shein: no /p/ structure; product URLs are domain + path (e.g. shein.se/Product-Name-p-123). Exclude login/social/policy.
+SHEIN_EXCLUDE_PATTERNS = [
+    "login", "signin", "sign-in", "facebook", "google", "apple", "register", "account",
+    "cart", "checkout", "wishlist", "wish-list", "auth", "oauth", "callback",
+    "policy", "privacy", "security", "terms", "help", "about", "contact", "faq",
+    "risk", "action/limit", "limit?risk",  # Shein risk/verification pages
+]
+# Only links with -p- (product) or -g- (goods) are treated as product pages; avoids policy/article (-a-) pages
+SHEIN_PRODUCT_LINK_PATTERNS = ["-p-", "-g-", "/detail/", "/product-detail/"]
+SHEIN_TILE_SELECTORS = [
+    "a[href*='-p-']",
+    "a[href*='-g-']",
+    "[class*='product'] a[href^='/']",
+    "[class*='Product'] a[href^='/']",
+    ".goods-item a",
+    ".product-item a",
+    "[class*='ProductCard'] a",
+    "a[data-id]",
+]
 
 
 async def hide_known_overlays(page: Page) -> None:
@@ -1151,6 +1172,60 @@ class Navigator:
             except Exception:
                 return None
             return self.page.url
+
+        # ==== Shein: go to RecommendSelection listing (e.g. .../RecommendSelection/Women-Tops), then pick a product ====
+        if "shein" in host:
+            base = (parsed.scheme or "https") + "://" + (parsed.netloc or "")
+            home_norm = (self.home_url or "").rstrip("/").lower()
+            # Fixed listing URL: same host, path RecommendSelection/Women-Tops-sc-017175498.html
+            shein_listing_url = base.rstrip("/") + "/RecommendSelection/Women-Tops-sc-017175498.html"
+            print(f"[DEBUG] auto_pick_pdp: host=shein, using listing {shein_listing_url}")
+            await try_close_common_overlays(self.page)
+            await hide_high_zindex_overlays(self.page)
+            await self.page.wait_for_timeout(400)
+            try:
+                await self.page.goto(shein_listing_url, wait_until="domcontentloaded", timeout=12000)
+                await self.page.wait_for_timeout(1500)
+            except Exception as e:
+                print(f"[DEBUG] auto_pick_pdp: shein goto listing failed: {e}")
+                return self.home_url
+
+            # Shein has no -p-/-g- product URLs on listing; clicking any image in the center goes to PDP
+            await self.page.wait_for_timeout(800)
+            # Scroll so product grid is in view
+            try:
+                await self.page.evaluate("window.scrollBy(0, 300)")
+                await self.page.wait_for_timeout(400)
+            except Exception:
+                pass
+            # Click an image in the center of the viewport (product image -> PDP)
+            clicked = await self.page.evaluate(
+                """() => {
+                  const vw = window.innerWidth, vh = window.innerHeight;
+                  const centerMinX = vw * 0.2, centerMaxX = vw * 0.8;
+                  const centerMinY = vh * 0.2, centerMaxY = vh * 0.8;
+                  const imgs = document.querySelectorAll('main img, [class*="product"] img, [class*="goods"] img, [class*="slick"] img, img[loading="lazy"]');
+                  for (const img of imgs) {
+                    const r = img.getBoundingClientRect();
+                    if (r.width < 80 || r.height < 80) continue;
+                    const cx = r.left + r.width/2, cy = r.top + r.height/2;
+                    if (cx >= centerMinX && cx <= centerMaxX && cy >= centerMinY && cy <= centerMaxY) {
+                      const clickable = img.closest('a') || img;
+                      clickable.click();
+                      return true;
+                    }
+                  }
+                  return false;
+                }"""
+            )
+            if clicked:
+                await self.page.wait_for_load_state("domcontentloaded")
+                await self.page.wait_for_timeout(1500)
+                if await self._looks_like_pdp():
+                    print(f"[DEBUG] auto_pick_pdp: Shein PDP confirmed at {self.page.url}")
+                    return self.page.url
+            print("[DEBUG] auto_pick_pdp: Shein strategy did not find PDP")
+            return self.home_url
 
         # ==== Other sites: strict URL patterns first (exclude /p/order, /p/cart), then tile click fallback ====
         await try_close_common_overlays(self.page)

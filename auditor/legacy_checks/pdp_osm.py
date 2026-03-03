@@ -9,9 +9,71 @@ from auditor.navigator import Navigator, PRODUCT_SCOPE_SELECTORS
 from auditor.screenshot import ScreenshotManager
 from auditor.report import CheckResult, Evidence
 from auditor.utils import find_element_in_frames
+from auditor import vision
 
 # Product scope for PDP: main, product containers, article (jula.se and others)
 PDP_SCOPE_SELECTORS = list(PRODUCT_SCOPE_SELECTORS) + ["article", "[class*='product']", "[class*='Product']", "[class*='pdp']"]
+
+
+async def _get_osm_container_bbox(page: Page, klarna_locator: Locator) -> Optional[List[int]]:
+    """
+    From the Klarna text element locator, find the OSM container (ancestor div/section/aside)
+    and return its bounding box in page coordinates [x, y, w, h] for drawing on full-page screenshot.
+    """
+    # Prefer ancestor [2] (grandparent) to encompass whole OSM block; fallback to [1]
+    for ancestor_index in (2, 1):
+        try:
+            container = klarna_locator.locator(
+                f"xpath=ancestor::*[name()='div' or name()='section' or name()='aside'][{ancestor_index}]"
+            )
+            if await container.count() == 0:
+                continue
+            box = await container.first.bounding_box()
+            if not box:
+                continue
+            scroll = await page.evaluate("() => ({ x: window.scrollX, y: window.scrollY })")
+            page_x = int(box["x"] + scroll["x"])
+            page_y = int(box["y"] + scroll["y"])
+            return [page_x, page_y, int(box["width"]), int(box["height"])]
+        except Exception:
+            continue
+    return None
+
+
+async def _draw_osm_bbox_on_full_page(
+    page: Page,
+    full_page_path: str,
+    element_locator: Optional[Locator],
+    element_handle: Optional[Any],
+    screenshot_manager: ScreenshotManager,
+) -> Optional[str]:
+    """
+    Draw green box around OSM container on full-page screenshot.
+    Prefer element_locator (Klarna text) to find OSM container; else use element_handle bbox (e.g. iframe).
+    Returns path to overlay image or None.
+    """
+    bbox: Optional[List[int]] = None
+    if element_locator is not None:
+        bbox = await _get_osm_container_bbox(page, element_locator)
+    if bbox is None and element_handle is not None:
+        try:
+            box = await element_handle.bounding_box()
+            if box:
+                scroll = await page.evaluate("() => ({ x: window.scrollX, y: window.scrollY })")
+                bbox = [
+                    int(box["x"] + scroll["x"]),
+                    int(box["y"] + scroll["y"]),
+                    int(box["width"]),
+                    int(box["height"]),
+                ]
+        except Exception:
+            pass
+    if not bbox or len(bbox) != 4:
+        return None
+    out_path = screenshot_manager._generate_path("pdp_osm_bbox")
+    if vision.draw_match_overlay(full_page_path, out_path, bbox, color=(0, 255, 0), thickness=4):
+        return out_path
+    return None
 
 
 class PDPOSMCheck:
@@ -70,6 +132,9 @@ class PDPOSMCheck:
                 await page.wait_for_timeout(300)
                 element_path = screenshot_manager._generate_path("pdp_osm_element")
                 await iframe_el.screenshot(path=element_path)
+                debug_overlay_path = await _draw_osm_bbox_on_full_page(
+                    page, page_full_path, iframe_el, None, screenshot_manager
+                )
                 print("[DEBUG] PDP_OSM: Klarna iframe found in product scope")
                 return CheckResult(
                     check_id=self.CHECK_ID,
@@ -78,7 +143,8 @@ class PDPOSMCheck:
                         screenshot_path=page_full_path,
                         page_screenshot_path=page_full_path,
                         element_screenshot_path=element_path,
-                        matched_text="Klarna iframe"
+                        matched_text="Klarna iframe",
+                        debug_overlay_path=debug_overlay_path,
                     ),
                     timestamp=datetime.now().isoformat() + "Z",
                     error_reason=None
@@ -101,6 +167,9 @@ class PDPOSMCheck:
                     await page.wait_for_timeout(300)
                     element_path = screenshot_manager._generate_path("pdp_osm_element")
                     await full_klarna.screenshot(path=element_path)
+                    debug_overlay_path = await _draw_osm_bbox_on_full_page(
+                        page, page_full_path, full_klarna, None, screenshot_manager
+                    )
                     print("[DEBUG] PDP_OSM: Klarna found outside product scope (WARN)")
                     return CheckResult(
                         check_id=self.CHECK_ID,
@@ -109,7 +178,8 @@ class PDPOSMCheck:
                             screenshot_path=page_full_path,
                             page_screenshot_path=page_full_path,
                             element_screenshot_path=element_path,
-                            matched_text=text_snippet
+                            matched_text=text_snippet,
+                            debug_overlay_path=debug_overlay_path,
                         ),
                         timestamp=datetime.now().isoformat() + "Z",
                         error_reason="Klarna found on page but outside product scope"
@@ -133,6 +203,9 @@ class PDPOSMCheck:
             await page.wait_for_timeout(300)
             element_path = screenshot_manager._generate_path("pdp_osm_element")
             await osm_el.screenshot(path=element_path)
+            debug_overlay_path = await _draw_osm_bbox_on_full_page(
+                page, page_full_path, osm_el, None, screenshot_manager
+            )
 
             status = "PASS"
             error_reason = None
@@ -140,7 +213,8 @@ class PDPOSMCheck:
                 screenshot_path=page_full_path,
                 page_screenshot_path=page_full_path,
                 element_screenshot_path=element_path,
-                matched_text=text_snippet
+                matched_text=text_snippet,
+                debug_overlay_path=debug_overlay_path,
             )
 
             print(f"[{self.CHECK_ID}] {status} - Full page: {page_full_path}, Element: {element_path}")

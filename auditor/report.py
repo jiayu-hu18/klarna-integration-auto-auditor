@@ -27,6 +27,8 @@ class Evidence:
     best_score: Optional[float] = None
     best_bbox: Optional[List[int]] = None
     all_templates: Optional[List[Dict[str, Any]]] = None
+    # FOOTER_KLARNA_LOGO: whole bottom of page (max height 800px), taken regardless of pass/fail
+    page_bottom_screenshot_path: Optional[str] = None
 
 
 @dataclass
@@ -51,19 +53,20 @@ class ReportGenerator:
         self.merchant_dir = self.out_dir / merchant
         self.merchant_dir.mkdir(parents=True, exist_ok=True)
     
-    def generate(self, results: List[CheckResult]) -> str:
-        """Generate JSON report"""
+    def generate(
+        self,
+        results: List[CheckResult],
+        detection_summary: Optional[Dict[str, Any]] = None,
+        skipped_checks: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """Generate JSON report. detection_summary = platform/psp/confidence/evidence; skipped_checks = list of {check_id, reason}."""
         report_path = self.merchant_dir / "report.json"
-        
-        # Generate run_id
+
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Calculate summary
         passed = sum(1 for r in results if r.status == "PASS")
         failed = sum(1 for r in results if r.status == "FAIL")
         warned = sum(1 for r in results if r.status == "WARN")
-        
-        # Build report
+
         report = {
             "merchant": self.merchant,
             "run_id": run_id,
@@ -76,11 +79,13 @@ class ReportGenerator:
                 "total": len(results)
             }
         }
-        
-        # Write JSON file
+        if detection_summary is not None:
+            report["detection_summary"] = detection_summary
+        if skipped_checks:
+            report["skipped_checks"] = skipped_checks
+
         with open(report_path, 'w', encoding='utf-8') as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
-        
         return str(report_path)
     
     def _format_result(self, result: CheckResult) -> Dict[str, Any]:
@@ -112,6 +117,8 @@ class ReportGenerator:
             evidence_dict["best_bbox"] = result.evidence.best_bbox
         if result.evidence.all_templates is not None:
             evidence_dict["all_templates"] = result.evidence.all_templates
+        if result.evidence.page_bottom_screenshot_path:
+            evidence_dict["page_bottom_screenshot_path"] = result.evidence.page_bottom_screenshot_path
         formatted = {
             "check_id": result.check_id,
             "status": result.status,

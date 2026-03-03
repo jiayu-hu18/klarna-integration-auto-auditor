@@ -9,6 +9,7 @@ Flow:
 3. Multi-template image matching on the payments section screenshot; template-specific aspect-ratio filter (wordmark ≥1.8, pink badge ≥1.15) to reject narrow matches.
 4. PASS only when match is in the payments section and passes ratio; evidence = footer_payments_section_attempt*.png (must visibly show Klarna).
 """
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -33,7 +34,7 @@ class KlarnaMatch:
     best_template_path: Optional[str] = None
     all_templates: Optional[List[Dict[str, Any]]] = None
 
-# Multi-template: discover from assets or use explicit list
+# Multi-template: discover from assets or use explicit list (legacy_checks -> auditor/assets)
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 def _load_template_paths() -> List[str]:
     discovered = vision.discover_templates(ASSETS_DIR)
@@ -47,7 +48,17 @@ def _load_template_paths() -> List[str]:
     return [p for p in fallback if Path(p).is_file()]
 
 MATCH_THRESHOLD = 0.75  # template match score threshold
-FOOTER_MAX_RETRIES = 2  # scroll-to-bottom → overlay clear → bring footer into view → screenshot payments section; retry once if no pass
+# Lower threshold for white-on-dark / clear templates (e.g. Kickscrew footer)
+FOOTER_CLEAR_WHITEBG_THRESHOLD = 0.63
+FOOTER_MAX_RETRIES = 2
+
+
+def _threshold_for_template(template_path: str) -> float:
+    """Use lower threshold for white_bg / footer_clear / clear_black templates (white-on-dark logos)."""
+    name = Path(template_path).name.lower()
+    if "white_bg" in name or "footer_clear" in name or "clear_black" in name:
+        return FOOTER_CLEAR_WHITEBG_THRESHOLD
+    return MATCH_THRESHOLD  # scroll-to-bottom → overlay clear → bring footer into view → screenshot payments section; retry once if no pass
 
 # ROI selector candidates for footer payment area (try first before full footer)
 FOOTER_PAYMENT_ROI_SELECTORS = [
@@ -144,7 +155,8 @@ async def _try_template_match_on_footer(
     result["roi_path"] = roi_path
     result["match_input_path"] = match_input
     for tp in template_paths:
-        mr = vision.match_template_in_image(match_input, tp, threshold=MATCH_THRESHOLD)
+        th = _threshold_for_template(tp)
+        mr = vision.match_template_in_image(match_input, tp, threshold=th, try_inverted=True)
         rec = {"template_path": tp, "score": mr.get("score", 0.0), "bbox": mr.get("bbox"), "found": mr.get("found", False)}
         result["all_templates"].append(rec)
         if (rec["score"] or 0) > (result["best_score"] or 0):
@@ -167,6 +179,9 @@ def _min_ratio_for_template(tp: str) -> float:
         return 1.8
     if "pink" in name:
         return 1.15
+    # white_bg / clear_black often used for icon-shaped white-on-dark logos; allow squarer bbox
+    if "white_bg" in name or "footer_clear" in name or "clear_black" in name:
+        return 0.8
     return 1.3
 
 
@@ -197,13 +212,14 @@ def _match_klarna_on_roi_image(
     all_templates: List[Dict[str, Any]] = []
 
     for tp in template_paths:
-        mr = vision.match_template_in_image(roi_path, tp, threshold=MATCH_THRESHOLD)
+        th = _threshold_for_template(tp)
+        mr = vision.match_template_in_image(roi_path, tp, threshold=th, try_inverted=True)
         score = mr.get("score", 0.0) or 0.0
         bbox = mr.get("bbox")
         rec = {"template_path": tp, "score": score, "bbox": bbox, "found": mr.get("found", False)}
         all_templates.append(rec)
 
-        if score < MATCH_THRESHOLD or not bbox:
+        if score < th or not bbox:
             continue
         ratio = _bbox_aspect_ratio(bbox)
         min_ratio = _min_ratio_for_template(tp)
@@ -263,6 +279,42 @@ async def detect_klarna_in_footer_with_templates(
         roi_path = footer_evidence_path
 
     return _match_klarna_on_roi_image(roi_path, debug_dir, attempt, template_paths)
+
+
+PAGE_BOTTOM_MAX_HEIGHT = 800
+
+
+async def screenshot_page_bottom(page: Page, output_path: str, max_height: int = PAGE_BOTTOM_MAX_HEIGHT) -> Optional[str]:
+    """
+    Scroll to bottom, wait for footer to render, then take viewport screenshot (what's
+    visible at the bottom). Crop to bottom max_height (800px) if viewport is taller.
+    Saves to output_path. Returns output_path if success else None.
+    """
+    import tempfile
+    try:
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await asyncio.sleep(1.5)
+    except Exception:
+        pass
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        await page.screenshot(path=tmp_path)
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        return None
+    if not Path(tmp_path).is_file():
+        return None
+    img_w, img_h = vision.get_image_size(tmp_path)
+    if img_h <= 0 or img_w <= 0:
+        Path(tmp_path).unlink(missing_ok=True)
+        return None
+    roi_h = min(max_height, img_h)
+    roi_y = img_h - roi_h
+    out = vision.crop_roi_from_image(tmp_path, 0, roi_y, img_w, roi_h, output_path)
+    Path(tmp_path).unlink(missing_ok=True)
+    return out if out and Path(output_path).is_file() else None
 
 
 async def screenshot_payments_section(page: Page, debug_dir: Path, attempt: int) -> Optional[str]:
@@ -527,6 +579,7 @@ class FooterKlarnaLogoCheck:
             screenshot_path = ""
             roi_path = None
             match_debug_path = None
+            page_bottom_screenshot_path: Optional[str] = None
 
             # Step A: Scroll to true bottom (wheel) to trigger lazy-loaded footer / Klarna icons
             await navigator.scroll_to_true_bottom(
@@ -538,6 +591,14 @@ class FooterKlarnaLogoCheck:
 
             # Step C: Bring footer payment area stably into viewport
             await navigator.bring_footer_into_view_stable()
+
+            # Brief wait so lazy-loaded footer content (e.g. AliExpress) has time to paint
+            await asyncio.sleep(1.5)
+
+            # Screenshot whole bottom of page (max height 800px), regardless of pass/fail
+            page_bottom_screenshot_path = await screenshot_page_bottom(
+                page, str(debug_dir / "footer_page_bottom.png"), max_height=PAGE_BOTTOM_MAX_HEIGHT
+            )
 
             for attempt in range(1, FOOTER_MAX_RETRIES + 1):
                 print(f"[{self.CHECK_ID}] attempt={attempt}")
@@ -569,6 +630,7 @@ class FooterKlarnaLogoCheck:
                             template_bbox=list(match.bbox) if match.bbox else None,
                             template_path=match.best_template_path,
                             matched_text=f"Klarna found in footer payments section (score={match.best_score:.3f})",
+                            page_bottom_screenshot_path=page_bottom_screenshot_path,
                         )
                         return CheckResult(
                             check_id=self.CHECK_ID,
@@ -630,6 +692,7 @@ class FooterKlarnaLogoCheck:
                 template_bbox=list(best_bbox) if best_bbox else None,
                 template_path=best_template_path,
                 matched_text=matched_text_evidence,
+                page_bottom_screenshot_path=page_bottom_screenshot_path,
             )
             status = "PASS" if found else "FAIL"
             error_reason = None if found else "Klarna logo not found in footer (template match)"
